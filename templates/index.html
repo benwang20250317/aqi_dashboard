@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AQI 儀表板</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans TC', sans-serif;
+            background-color: #111827;
+            color: #d1d5db;
+            overflow-y: hidden;
+        }
+        .dashboard-container {
+            gap: 1.5rem; padding: 1.5rem; height: auto; 
+            min-height: calc(100vh - 80px); max-width: 1800px; margin: 0 auto;
+        }
+        @media (min-width: 1024px) { .dashboard-container { height: calc(100vh - 80px); } }
+        .card {
+            background-color: #1f2937; border-radius: 0.75rem; padding: 1.5rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            overflow: hidden; display: flex; flex-direction: column;
+        }
+        .card-title {
+            font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;
+            padding-bottom: 0.5rem; border-bottom: 1px solid #374151;
+        }
+        #map-container, #historical-map-container {
+             flex-grow: 1; border-radius: 0.5rem; background-color: #a3daff;
+             min-height: 400px; 
+        }
+        .leaflet-container { background: #eaf6ff; }
+        .aqi-marker {
+            border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.7);
+            color: white; font-weight: bold; font-size: 12px;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 0 8px rgba(0,0,0,0.5);
+        }
+        .table-row-hover:hover { background-color: #374151; cursor: pointer; }
+        .mode-switcher {
+            background-color: #1f2937; padding: 1rem 1.5rem; display: flex;
+            justify-content: center; align-items: center; gap: 1rem; height: 80px;
+        }
+        .mode-button {
+            padding: 0.5rem 1.5rem; border: 2px solid transparent; border-radius: 9999px;
+            font-weight: 600; transition: all 0.2s ease-in-out;
+        }
+        .mode-button.active {
+            border-color: #3b82f6; background-color: #3b82f6; color: #ffffff;
+        }
+        .mode-button:not(.active) { color: #9ca3af; background-color: #374151; }
+        
+        /* 【修改點】只留下 view 的預設隱藏，移除所有 .active 的 display 設定 */
+        .view { display: none; }
+        #historical-view.active { display: block; }
+
+        #historical-stats-container {
+            display: flex; flex-direction: column; align-items: center;
+            justify-content: center; height: 100%; gap: 2rem;
+        }
+        .stat-card {
+            background-color: #374151; border-radius: 1rem; padding: 2rem;
+            text-align: center; width: 80%; max-width: 400px;
+        }
+        .stat-value { font-size: 4rem; font-weight: 800; line-height: 1; color: #ef4444; }
+        .stat-label { font-size: 1.125rem; color: #9ca3af; margin-top: 0.5rem; }
+        .stat-comparison { margin-top: 1.5rem; font-size: 1.25rem; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <header class="mode-switcher">
+        <a href="/" class="text-xl font-bold text-white mr-auto hover:opacity-80 transition-opacity">AQI 儀表板</a>
+        <div id="clock" class="text-lg text-gray-400 font-medium"></div>
+        <div>
+            <button id="realtime-btn" class="mode-button active">即時戰情室</button>
+            <button id="historical-btn" class="mode-button">歷史資料分析</button>
+        </div>
+    </header>
+
+    <div id="realtime-view" class="dashboard-container view active flex flex-col lg:grid lg:grid-cols-[1fr_2fr_1.5fr]">
+        <div class="flex lg:flex-col gap-6 order-3 lg:order-none">
+            <div id="green-zone" class="card flex-1"><h2 class="card-title flex items-center"><span class="w-4 h-4 rounded-full bg-green-500 mr-3"></span>良好</h2><div id="green-list" class="space-y-2 text-sm overflow-y-auto pr-2"></div></div>
+            <div id="yellow-zone" class="card flex-1"><h2 class="card-title flex items-center"><span class="w-4 h-4 rounded-full bg-yellow-500 mr-3"></span>普通</h2><div id="yellow-list" class="space-y-2 text-sm overflow-y-auto pr-2"></div></div>
+            <div id="red-zone" class="card flex-1"><h2 class="card-title flex items-center"><span class="w-4 h-4 rounded-full bg-red-500 mr-3"></span>不健康</h2><div id="red-list" class="space-y-2 text-sm overflow-y-auto pr-2"></div></div>
+        </div>
+        <div class="card order-1 lg:order-none">
+            <h2 class="card-title">即時數據查詢</h2>
+            <div class="flex items-center gap-4 mb-4">
+                <select id="county-select" class="w-full bg-gray-700 border border-gray-600 text-white rounded-lg p-2.5 focus:ring-blue-500 focus:border-blue-500"></select>
+                <button id="query-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-6 rounded-lg transition">查詢</button>
+            </div>
+            <div class="overflow-x-auto flex-grow">
+                <table class="w-full text-sm text-left text-gray-400">
+                    <thead class="text-xs text-gray-300 uppercase bg-gray-700"><tr><th class="px-6 py-3">測站</th><th class="px-6 py-3">AQI</th><th class="px-6 py-3">狀態</th><th class="px-6 py-3">觀測時間</th></tr></thead>
+                    <tbody id="results-tbody"><tr><td colspan="4" class="text-center p-8">請選擇縣市查詢</td></tr></tbody>
+                </table>
+                <p id="error-message" class="text-center p-8 text-red-400 hidden"></p>
+            </div>
+        </div>
+        <div class="card p-0 order-2 lg:order-none"><div id="map-container"></div></div>
+    </div>
+
+    <div id="historical-view" class="view p-6" style="height: calc(100vh - 80px);">
+        <div class="card h-full">
+            <h2 class="card-title">歷史資料分析</h2>
+            <div class="flex items-center gap-4 mb-6 p-4 bg-gray-900/50 rounded-lg flex-wrap"> 
+                <div class="flex-1 min-w-[200px]" id="historical-county-selector-wrapper"><label for="historical-county-select" class="block mb-2 text-sm font-medium">選擇縣市</label><select id="historical-county-select" class="w-full bg-gray-700 border-gray-600 text-white rounded-lg p-2.5"></select></div>
+                <div class="flex-1 min-w-[200px]" id="historical-year-selector-wrapper" style="display: none;"><label for="historical-year-select" class="block mb-2 text-sm font-medium">選擇年份</label><select id="historical-year-select" class="w-full bg-gray-700 border-gray-600 text-white rounded-lg p-2.5"></select></div>
+                <div class="flex-1 min-w-[200px]"><label for="analysis-type-select" class="block mb-2 text-sm font-medium">選擇分析項目</label><select id="analysis-type-select" class="w-full bg-gray-700 border-gray-600 text-white rounded-lg p-2.5">
+                    <option value="annual-map">年度地圖分佈 (全台)</option>
+                    <option value="annual-trend">年度趨勢分析</option>
+                    <option value="seasonal-trend">季節性變化分析</option>
+                    <option value="monthly-distribution">年度AQI等級分佈</option>
+                    <option value="unhealthy-days-count">年度不健康日統計</option>
+                </select></div>
+                <div class="self-end"><button id="analyze-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-6 rounded-lg">開始分析</button></div>
+            </div>
+            <div id="historical-result-container" class="flex-grow bg-gray-800 rounded-lg p-4 relative">
+                <canvas id="historical-chart" style="display: none;"></canvas>
+                <div id="historical-map-container" style="display: none; height: 100%;"></div>
+                <div id="historical-stats-container" style="display: none;"></div>
+                <div id="historical-placeholder" class="absolute inset-0 flex items-center justify-center text-gray-500 text-lg">正在載入預設分析圖表...</div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    const realtimeBtn = document.getElementById('realtime-btn'), historicalBtn = document.getElementById('historical-btn');
+    const realtimeView = document.getElementById('realtime-view'), historicalView = document.getElementById('historical-view');
+    const clockElement = document.getElementById('clock');
+    const countySelect = document.getElementById('county-select'), queryBtn = document.getElementById('query-btn');
+    const resultsTbody = document.getElementById('results-tbody'), errorMessage = document.getElementById('error-message');
+    const greenList = document.getElementById('green-list'), yellowList = document.getElementById('yellow-list'), redList = document.getElementById('red-list');
+    let map;
+    let stationMarkers = L.layerGroup();
+    let stationMarkerObjects = {};
+    const counties = ["基隆市", "臺北市", "新北市", "桃園市", "新竹市", "新竹縣", "苗栗縣", "臺中市", "彰化縣", "南投縣", "雲林縣", "嘉義市", "嘉義縣", "臺南市", "高雄市", "屏東縣", "宜蘭縣", "花蓮縣", "臺東縣", "澎湖縣", "金門縣", "連江縣"];
+    const countyCenters = {"基隆市":[25.1276,121.7419],"臺北市":[25.033,121.5654],"新北市":[25.0169,121.4626],"桃園市":[24.9936,121.3],"新竹市":[24.8039,120.9687],"新竹縣":[24.8423,121.0116],"苗栗縣":[24.5602,120.8214],"臺中市":[24.1477,120.6736],"彰化縣":[24.0531,120.5151],"南投縣":[23.9169,120.982],"雲林縣":[23.7091,120.4319],"嘉義市":[23.4801,120.4464],"嘉義縣":[23.45,120.4],"臺南市":[22.9997,120.2133],"高雄市":[22.6273,120.3014],"屏東縣":[22.6715,120.487],"宜蘭縣":[24.7458,121.7523],"花蓮縣":[23.9871,121.6016],"臺東縣":[22.7566,121.1511],"澎湖縣":[23.57,119.57],"金門縣":[24.4382,118.3242],"連江縣":[26.1492,119.9542]};
+    const historicalCountySelect = document.getElementById('historical-county-select'), analysisTypeSelect = document.getElementById('analysis-type-select'), analyzeBtn = document.getElementById('analyze-btn');
+    const historicalPlaceholder = document.getElementById('historical-placeholder'), historicalChartCanvas = document.getElementById('historical-chart'), historicalMapContainer = document.getElementById('historical-map-container'), historicalStatsContainer = document.getElementById('historical-stats-container');
+    const historicalCountyWrapper = document.getElementById('historical-county-selector-wrapper'), historicalYearWrapper = document.getElementById('historical-year-selector-wrapper'), historicalYearSelect = document.getElementById('historical-year-select');
+    let historicalChart = null, historicalMap = null;
+    let historicalMarkers = L.layerGroup();
+    let isFirstHistoricalLoad = true;
+
+    function initialize() {
+        startClock();
+        setupModeSwitcher();
+        initializeRealtimeDashboard();
+        initializeHistoricalAnalysis();
+    }
+
+    function startClock() { function updateClock() { const now = new Date(); const options = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Taipei' }; clockElement.textContent = new Intl.DateTimeFormat('sv-SE', options).format(now); } updateClock(); setInterval(updateClock, 1000); }
+    function populateCountySelect(selectElement) { counties.forEach(name => { const option = document.createElement('option'); option.value = name; option.textContent = name; selectElement.appendChild(option); }); }
+    function createAqiIcon(aqi, isLarge = false) { const size = isLarge ? 48 : 32; let color = '#22c55e'; if (aqi > 50 && aqi <= 100) color = '#f59e0b'; if (aqi > 100) color = '#ef4444'; const fontSize = isLarge ? '16px' : '12px'; return L.divIcon({ html: `<div class="aqi-marker" style="background-color: ${color}; width: ${size}px; height: ${size}px; font-size: ${fontSize};">${aqi}</div>`, className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2] }); }
+    
+    function setupModeSwitcher() {
+        realtimeBtn.addEventListener('click', () => switchMode('realtime'));
+        historicalBtn.addEventListener('click', () => {
+            switchMode('historical');
+            if (isFirstHistoricalLoad) {
+                analyzeBtn.click();
+                isFirstHistoricalLoad = false;
+            }
+        });
+    }
+    function switchMode(mode) {
+        const isRealtime = mode === 'realtime';
+        
+        // 使用 Tailwind class 來控制顯示/隱藏
+        realtimeView.classList.toggle('active', isRealtime);
+        realtimeView.classList.toggle('flex', isRealtime); // 手機版
+        realtimeView.classList.toggle('lg:grid', isRealtime); // 電腦版
+        realtimeView.classList.toggle('hidden', !isRealtime);
+
+        historicalView.classList.toggle('active', !isRealtime);
+        historicalView.classList.toggle('hidden', isRealtime);
+
+        realtimeBtn.classList.toggle('active', isRealtime);
+        historicalBtn.classList.toggle('active', !isRealtime);
+
+        if (isRealtime && map) setTimeout(() => map.invalidateSize(), 10);
+        if (!isRealtime && historicalMap) setTimeout(() => historicalMap.invalidateSize(), 10);
+    }
+    
+    function initializeRealtimeDashboard() { populateCountySelect(countySelect); initializeMap(); fetchCountySummary(); queryBtn.addEventListener('click', fetchCountyData); }
+    function initializeMap() { map = L.map('map-container').setView([23.9738, 120.9820], 7); L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; OpenStreetMap &copy; CARTO' }).addTo(map); stationMarkers.addTo(map); }
+    async function fetchCountySummary() { try { const response = await fetch('/api/county-summary'); const data = await response.json(); updateStatusZones(data); } catch (e) { console.error(e); } }
+    function updateStatusZones(data) { greenList.innerHTML = ''; yellowList.innerHTML = ''; redList.innerHTML = ''; if (!data) return; data.sort((a, b) => a.average_aqi - b.average_aqi); data.forEach(item => { const avgAqi = parseInt(item.average_aqi, 10); if (isNaN(avgAqi)) return; const countyName = item.County; if (!countyName) return; const countyDiv = document.createElement('div'); countyDiv.className = 'flex items-center justify-between cursor-pointer hover:bg-gray-700 p-1 rounded'; countyDiv.innerHTML = `<span>${countyName}</span><span class="font-bold">${avgAqi}</span>`; countyDiv.addEventListener('click', () => { countySelect.value = countyName; fetchCountyData(); }); if (avgAqi <= 50) greenList.appendChild(countyDiv); else if (avgAqi <= 100) yellowList.appendChild(countyDiv); else redList.appendChild(countyDiv); }); }
+    async function fetchCountyData() { const selectedCounty = countySelect.value; if (!selectedCounty) return; resultsTbody.innerHTML = '<tr><td colspan="4" class="text-center p-8">載入中...</td></tr>'; errorMessage.classList.add('hidden'); stationMarkers.clearLayers(); stationMarkerObjects = {}; try { const response = await fetch(`/api/county-data/${selectedCounty}`); const data = await response.json(); renderTable(data); focusMapOnCounty(selectedCounty, data); } catch (e) { console.error(e); errorMessage.textContent = '資料載入失敗！'; errorMessage.classList.remove('hidden'); } }
+    function renderTable(data) { resultsTbody.innerHTML = ''; if (!data || data.length === 0) { resultsTbody.innerHTML = '<tr><td colspan="4" class="text-center p-8">查無資料</td></tr>'; return; } data.sort((a, b) => (parseInt(b.AQI, 10) || 0) - (parseInt(a.AQI, 10) || 0)); data.forEach(item => { const row = document.createElement('tr'); row.className = 'bg-gray-800 border-b border-gray-700 table-row-hover'; const siteName = item.SiteName || 'N/A'; const aqi = parseInt(item.AQI, 10); const status = item.Status || 'N/A'; const dataDate = item.DataCreationDate; row.addEventListener('click', () => handleStationClick(siteName)); let statusColor = 'text-green-400', lightColor = 'bg-green-500'; if (aqi > 50 && aqi <= 100) { statusColor = 'text-yellow-400'; lightColor = 'bg-yellow-500'; } if (aqi > 100) { statusColor = 'text-red-400'; lightColor = 'bg-red-500'; } let formattedTime = 'N/A'; if (dataDate) { try { const date = new Date(dataDate); formattedTime = date.toLocaleString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true }); } catch (e) { formattedTime = 'Invalid Date'; } } row.innerHTML = `<td class="px-6 py-4">${siteName}</td><td class="px-6 py-4 font-bold ${statusColor}">${isNaN(aqi)?'N/A':aqi}</td><td class="px-6 py-4"><div class="flex items-center"><span class="h-3 w-3 rounded-full mr-3 ${lightColor}"></span><span>${status}</span></div></td><td class="px-6 py-4 text-xs">${formattedTime}</td>`; resultsTbody.appendChild(row); }); }
+    function handleStationClick(sitename) { if (sitename === 'N/A') return; const marker = stationMarkerObjects[sitename]; if (marker) { map.flyTo(marker.getLatLng(), 15); marker.openPopup(); } }
+    function focusMapOnCounty(countyName, stationData) { const center = countyCenters[countyName]; if (center) map.flyTo(center, ["澎湖縣","金門縣","連江縣"].includes(countyName) ? 11 : 10); if (stationData) { stationData.forEach(station => { const lat = parseFloat(station.Latitude), lon = parseFloat(station.Longitude), aqi = parseInt(station.AQI, 10), siteName = station.SiteName, status = station.Status; if (![lat, lon, aqi].some(isNaN) && siteName) { const marker = L.marker([lat, lon], { icon: createAqiIcon(aqi) }); marker.bindPopup(`<b>${siteName}</b><br>AQI: ${aqi} (${status})`); stationMarkers.addLayer(marker); stationMarkerObjects[siteName] = marker; } }); } }
+
+    function initializeHistoricalAnalysis() {
+        populateCountySelect(historicalCountySelect);
+        const lastFullYear = new Date().getFullYear() - 1;
+        for (let year = 2020; year <= lastFullYear; year++) {
+            const option = document.createElement('option'); option.value = year; option.textContent = `${year} 年`; historicalYearSelect.appendChild(option);
+        }
+        historicalYearSelect.value = lastFullYear;
+        analysisTypeSelect.addEventListener('change', toggleAnalysisInputs);
+        analyzeBtn.addEventListener('click', runAnalysis);
+        toggleAnalysisInputs();
+        runAnalysis();
+    }
+    function toggleAnalysisInputs() {
+        const analysisType = analysisTypeSelect.value;
+        const needsCounty = ['annual-trend', 'seasonal-trend', 'monthly-distribution', 'unhealthy-days-count'].includes(analysisType);
+        const needsYear = ['annual-map', 'monthly-distribution', 'unhealthy-days-count'].includes(analysisType);
+        historicalCountyWrapper.style.display = needsCounty ? 'block' : 'none';
+        historicalYearWrapper.style.display = needsYear ? 'block' : 'none';
+    }
+    async function runAnalysis() {
+        const analysisType = analysisTypeSelect.value;
+        historicalPlaceholder.textContent = "正在計算...";
+        historicalPlaceholder.style.display = 'flex';
+        [historicalChartCanvas, historicalMapContainer, historicalStatsContainer].forEach(el => el.style.display = 'none');
+        if (historicalChart) historicalChart.destroy();
+        historicalMarkers.clearLayers();
+        try {
+            let url;
+            const selectedCounty = historicalCountySelect.value;
+            const selectedYear = historicalYearSelect.value;
+
+            switch(analysisType) {
+                case 'annual-map': url = `/api/historical/annual-map?year=${selectedYear}`; break;
+                case 'annual-trend': case 'seasonal-trend':
+                    if (!selectedCounty) throw new Error("請選擇縣市");
+                    url = `/api/historical/${analysisType}?county=${selectedCounty}`; break;
+                case 'monthly-distribution': case 'unhealthy-days-count':
+                    if (!selectedCounty) throw new Error("請選擇縣市");
+                    url = `/api/historical/${analysisType}?county=${selectedCounty}&year=${selectedYear}`; break;
+            }
+            const response = await fetch(url);
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '查詢失敗');
+            if (data.length === 0 && analysisType !== 'unhealthy-days-count') throw new Error(`找不到資料`);
+            
+            historicalPlaceholder.style.display = 'none';
+
+            switch(analysisType) {
+                case 'annual-map': drawAnnualMap(data, selectedYear); break;
+                case 'annual-trend': drawAnnualTrendChart(data, selectedCounty); break;
+                case 'seasonal-trend': drawSeasonalTrendChart(data, selectedCounty); break;
+                case 'monthly-distribution': drawMonthlyDistributionChart(data, selectedCounty, selectedYear); break;
+                case 'unhealthy-days-count': drawUnhealthyDaysCount(data, selectedCounty, selectedYear); break;
+            }
+        } catch (error) {
+            historicalPlaceholder.textContent = `分析錯誤: ${error.message}`;
+        }
+    }
+    
+    function drawUnhealthyDaysCount(data, county, year) {
+        historicalStatsContainer.style.display = 'flex';
+        historicalStatsContainer.innerHTML = '';
+        let comparisonHTML = '';
+        if (data.change_percentage !== null) {
+            const isImprovement = data.change_percentage < 0;
+            const color = isImprovement ? 'text-green-400' : 'text-red-400';
+            const arrow = isImprovement ? '↓' : '↑';
+            comparisonHTML = `<p class="stat-comparison ${color}">${arrow} ${Math.abs(data.change_percentage)}%</p><p class="text-sm text-gray-500">與 ${data.previous_year} 年 (${data.previous_unhealthy_days} 天) 相較</p>`;
+        } else {
+            comparisonHTML = `<p class="text-sm text-gray-500 mt-4">缺少 ${data.previous_year} 年資料可供比較</p>`;
+        }
+        historicalStatsContainer.innerHTML = `<div class="stat-card"><div class="stat-value">${data.unhealthy_days}</div><div class="stat-label">${year} 年 ${county}<br>不健康日 (日均AQI > 100) 總天數</div>${comparisonHTML}</div>`;
+    }
+
+    function drawAnnualMap(data, year) {
+        historicalMapContainer.style.display = 'block';
+        if (!historicalMap) {
+            historicalMap = L.map('historical-map-container').setView([23.9738, 120.9820], 6);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; OpenStreetMap &copy; CARTO' }).addTo(historicalMap);
+            historicalMarkers.addTo(historicalMap);
+        } else {
+             setTimeout(() => historicalMap.invalidateSize(), 10);
+        }
+        data.forEach(item => { const center = countyCenters[item.County], avgAqi = parseInt(item.average_aqi, 10); if (center && !isNaN(avgAqi)) { const marker = L.marker(center, { icon: createAqiIcon(avgAqi, true) }); marker.bindPopup(`<b>${item.County}</b><br>${year} 年平均 AQI: ${avgAqi}`); historicalMarkers.addLayer(marker); } });
+    }
+
+    function drawAnnualTrendChart(data, county) {
+        historicalChartCanvas.style.display = 'block';
+        const ctx = historicalChartCanvas.getContext('2d');
+        
+        setTimeout(() => {
+            historicalChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.map(d => d.year),
+                    datasets: [{
+                        label: `${county} 年度平均 AQI 趨勢`,
+                        data: data.map(d => d.average_aqi),
+                        backgroundColor: data.map(d => d.average_aqi <= 50 ? 'rgba(34, 197, 94, 0.7)' : d.average_aqi <= 100 ? 'rgba(245, 158, 11, 0.7)' : 'rgba(239, 68, 68, 0.7)'),
+                        borderColor: data.map(d => d.average_aqi <= 50 ? '#22c55e' : d.average_aqi <= 100 ? '#f59e0b' : '#ef4444'),
+                        borderWidth: 2
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, title: { display: true, text: '年平均 AQI', color: '#9ca3af' }, ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' } }, x: { title: { display: true, text: '年份', color: '#9ca3af' }, ticks: { color: '#9ca3af' }, grid: { display: false } } }, plugins: { legend: { labels: { color: '#d1d5db' } } } }
+            });
+        }, 10);
+    }
+    
+    function drawSeasonalTrendChart(data, county) {
+        historicalChartCanvas.style.display = 'block';
+        const ctx = historicalChartCanvas.getContext('2d');
+        
+        const goodZonePlugin = {
+            id: 'goodZone',
+            beforeDatasetsDraw: (chart) => {
+                const { ctx, chartArea: { top, bottom, left, right }, scales: { y } } = chart;
+                const y50 = y.getPixelForValue(50);
+                const y0 = y.getPixelForValue(0);
+                ctx.save();
+                ctx.fillStyle = 'rgba(34, 197, 94, 0.1)';
+                const startY = Math.max(top, y50);
+                const endY = Math.min(bottom, y0);
+                if (endY > startY) {
+                     ctx.fillRect(left, startY, right - left, endY - startY);
+                }
+                if (y50 >= top && y50 <= bottom) {
+                    ctx.beginPath();
+                    ctx.strokeStyle = 'rgba(34, 197, 94, 0.5)';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([6, 6]);
+                    ctx.moveTo(left, y50);
+                    ctx.lineTo(right, y50);
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+        };
+
+        setTimeout(() => {
+            historicalChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.map(d => `${d.month}月`),
+                    datasets: [{
+                        label: `${county} 季節性平均 AQI 趨勢`,
+                        data: data.map(d => d.average_aqi),
+                        borderColor: 'rgba(59, 130, 246, 1)',
+                        backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: 'rgba(59, 130, 246, 1)',
+                        pointBorderColor: '#fff',
+                        pointHoverBackgroundColor: '#fff',
+                        pointHoverBorderColor: 'rgba(59, 130, 246, 1)',
+                        pointRadius: 5,
+                        pointHoverRadius: 8
+                    }]
+                },
+                plugins: [goodZonePlugin],
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: false, title: { display: true, text: '月平均 AQI', color: '#9ca3af' }, ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' } },
+                        x: { title: { display: true, text: '月份', color: '#9ca3af' }, ticks: { color: '#9ca3af' }, grid: { display: false } }
+                    },
+                    plugins: { legend: { labels: { color: '#d1d5db' } } }
+                }
+            });
+        }, 10);
+    }
+    
+    function drawMonthlyDistributionChart(data, county, year) {
+        historicalChartCanvas.style.display = 'block';
+        const ctx = historicalChartCanvas.getContext('2d');
+
+        setTimeout(() => {
+            historicalChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.map(d => `${d.month}月`),
+                    datasets: [
+                        { label: '良好 (<= 50)', data: data.map(d => d.good_days), backgroundColor: 'rgba(34, 197, 94, 0.7)'},
+                        { label: '普通 (51-100)', data: data.map(d => d.moderate_days), backgroundColor: 'rgba(245, 158, 11, 0.7)'},
+                        { label: '不健康 (> 100)', data: data.map(d => d.unhealthy_days), backgroundColor: 'rgba(239, 68, 68, 0.7)'}
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { title: { display: true, text: `${year} 年 ${county} 每月 AQI 等級天數分佈`, color: '#d1d5db', font: { size: 16 } }, legend: { labels: { color: '#d1d5db' } } },
+                    scales: { x: { stacked: true, title: { display: true, text: '月份', color: '#9ca3af' }, ticks: { color: '#9ca3af' }, grid: { display: false } }, y: { stacked: true, title: { display: true, text: '天數', color: '#9ca3af' }, ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' } } }
+                }
+            });
+        }, 10);
+    }
+    
+    document.addEventListener('DOMContentLoaded', initialize);
+</script>
+</body>
+</html>

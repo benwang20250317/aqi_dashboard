@@ -1,0 +1,25 @@
+# ====== Web Framework ======
+# The core web server application
+Flask
+# For handling Cross-Origin Resource Sharing (CORS)
+Flask-Cors
+
+# ====== Data Handling & API Requests ======
+# For data manipulation and analysis (DataFrame)
+pandas
+# For making HTTP requests to the API
+requests
+
+# ====== Database Connectors & ORM ======
+# SQLAlchemy Object Relational Mapper (ORM) Toolkit
+SQLAlchemy
+# Database driver for crawler.py (provides 'MySQLdb')
+mysqlclient
+# Database driver for SQLAlchemy in dashboard_api.py and import_lean_data.py
+mysql-connector-python
+
+# ====== Utilities ======
+# For loading environment variables from .env files
+python-dotenv
+# Provides up-to-date SSL root certificates for the requests library
+certifi
